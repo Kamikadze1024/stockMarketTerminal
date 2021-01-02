@@ -11,5 +11,4 @@ SOURCES += \
 
 HEADERS += \
     InternalStruct.hpp \
-    ThreadsafeQueue.hpp \
     jsonparser.hpp

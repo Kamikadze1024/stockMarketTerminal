@@ -4,68 +4,103 @@
 #include <boost/chrono.hpp>
 #include <fstream>
 #include <signal.h>
-#include "jsonparser.hpp"
-#include "ThreadsafeQueue.hpp"
-#include "InternalStruct.hpp"
 #include <iostream>
+#include <atomic>
+#include "jsonparser.hpp"
+#include "InternalStruct.hpp"
 
 //константы
 static const std::string CONST_KEY_REVERSE        = "-r";
-static const std::string CONST_KEY_FILENAME       = "-f";
 static const std::string CONST_KEY_SAVE_LEN       = "-l";
-static const std::string CONST_DEFAULT_FILE_NAME  = "defaultFileName";
 static const int         CONST_DEFAULT_SAVE_LEN   = 10;
-static const int         CONST_THD_SLP_PERIOD_MS  = 15; //период сна потоков в милисекундах
+static const int         CONST_THD_SLP_PER_MS     = 1000;
+static const int         CONST_FAILED_RC          = 2;
 
 //глобалы
-static std::string    INPUT_FILE_NAME; //имя файла с json ами
-static bool           REVERSE_FLAG      = false;//флаг реверсивного отображения
-static bool           THREAD_ACTIVE_FLG = true; //флаг работоспособности потоков
-static int            SAVE_LEN          = 0;//глубина хранения
-static InternalStruct InternalStruct; //хранилище данных
-static bool           NEED_SHOW_REZ     = false; //надо показать результат работы программы
-
+static bool                  REVERSE_FLAG      = false;//флаг реверсивного отображения
+static int                   SAVE_LEN          = 0;//глубина хранения
+static InternalStruct        InternalStruct; //хранилище данных
+static std::atomic<bool>     thdFlag; //флаг работы потока
 
 //функция перехвата CTRL + C
 void ctrlcDesc (int sig) {
-    //остановить потоки
-    THREAD_ACTIVE_FLG = false;
+    /*
+     * Запрещаю прерывать выполнение завершения
+     */
+    sigset_t newMask;
+    sigset_t oldMask;
+
+    if(sigfillset(&newMask) != 0) {
+        std::cout << "Failed to sigfillset" << std::endl;
+        exit(CONST_FAILED_RC);
+    }
+
+    if(sigprocmask(SIG_SETMASK, &newMask, &oldMask) != 0) {
+        std::cout << "Failed to mask signals" << std::endl;
+        exit(CONST_FAILED_RC);
+    }
+
+    thdFlag.store(false);
     std::cout << "Ctrl + C found" << std::endl;
+
+    //разрешить получение сигналов
+    if(sigprocmask(SIG_SETMASK, &oldMask, NULL) != 0) {
+        std::cout << "Failed to umask signals" << std::endl;
+        exit(CONST_FAILED_RC);
+    }
     sig = 0;
 }
 
 //функция перехвата sigusr1
 void sigusr1Hdl(int sig) {
-    std::cout << "SIGUSR1 HANDLED" << std::endl;
+    /*
+     * Запрещаю прерывать выполнение вывода
+     */
+    sigset_t newMask;
+    sigset_t oldMask;
 
-    //защита от "закидывания сигналами"
-    if(!NEED_SHOW_REZ) {
-        NEED_SHOW_REZ = true;
+    if(sigfillset(&newMask) != 0) {
+        std::cout << "Failed to sigfillset" << std::endl;
+        exit(CONST_FAILED_RC);
     }
-    sig = 0;
+
+    if(sigprocmask(SIG_SETMASK, &newMask, &oldMask) != 0) {
+        std::cout << "Failed to mask signals" << std::endl;
+        exit(CONST_FAILED_RC);
+    }
+
+    /*
+     * отобразить итоговый результат работы программы
+     * по сигналу SIGUSR1
+     */
+    std::string usr1Str = InternalStruct.getResString(REVERSE_FLAG);
+    //вывод результата работы программы на экран
+    std::cout << usr1Str << std::endl;
+
+    //разрешить получение сигналов
+    if(sigprocmask(SIG_SETMASK, &oldMask, NULL) != 0) {
+        std::cout << "Failed to umask signals" << std::endl;
+        exit(2);
+    }
 }
 
-//задержка потока, вызвавшего wait
-void wait(int seconds) {
-  boost::this_thread::sleep_for(boost::chrono::seconds{seconds});
-}
 
-
-//поток разбора пришедших сообщений
-void receivedMsgsParser(boost::shared_ptr<ThreadsafeQueue<std::string>>
-                        inpQueue) {
-
+/*
+ * Поток, который оставляет программу работающей, когда
+ * все строки из stdin уже получены
+ */
+void programmAliveThdFunc() {
+    while(thdFlag) {
         /*
          * Усыпить поток апдейта структуры InternalStruct
          */
-        boost::chrono::milliseconds period(CONST_THD_SLP_PERIOD_MS);
+        boost::chrono::milliseconds period(CONST_THD_SLP_PER_MS);
         boost::this_thread::sleep_for(period);
+    }
 }
 
 //распечатать значения глобалов
 void printGlobals() {
-    std::cout << "INPUT_FILE_NAME = "
-              << INPUT_FILE_NAME << std::endl; //имя файла с json ами
     std::cout << "REVERSE_FLAG    = "
               << REVERSE_FLAG << std::endl;    //флаг реверсивного отображения
     std::cout << "SAVE_LEN        = "
@@ -81,24 +116,15 @@ int main(int argc, char *argv[]) {
     //регистрация обработчика SIGUSR1
     signal(SIGUSR1, sigusr1Hdl);
 
+    //разрешение потоку поддержки работы работать
+    thdFlag.store(true);
+
     //разбор аргументов командной строки
     for(int count = 0; count < argc; count++) {
         std::string readArg(argv[count]);
         if(readArg.compare(CONST_KEY_REVERSE) == 0) {
             //отображать в обратном порядке
             REVERSE_FLAG = true;
-        }
-
-        if(readArg.compare(CONST_KEY_FILENAME) == 0) {
-            if((count + 1) < argc) {
-                //сохранить имя файла с json ами
-                std::string       inpFn(argv[count + 1]);
-                INPUT_FILE_NAME = inpFn;
-            } else {
-                std::cout << "ATTENTION: Используется имя файла по-умолчанию"
-                          << std::endl;
-                INPUT_FILE_NAME = CONST_DEFAULT_FILE_NAME;
-            }
         }
 
         //нестандартная глубина хранения
@@ -113,13 +139,6 @@ int main(int argc, char *argv[]) {
                 SAVE_LEN = CONST_DEFAULT_SAVE_LEN;
             }
         }
-    }
-
-    //если параметр -f вообще не задан
-    if(INPUT_FILE_NAME.compare("") == 0) {
-        std::cout << "ATTENTION: Используется имя файла по-умолчанию"
-                  << std::endl;
-        INPUT_FILE_NAME = CONST_DEFAULT_FILE_NAME;
     }
 
     //если параметр -l вообще не задан
@@ -163,7 +182,6 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-
         if(!jp.parse()) {
             std::cout << "Parsing failed" << std::endl;
             continue;
@@ -183,25 +201,13 @@ int main(int argc, char *argv[]) {
     }
 
     /*
-     * отобразить итоговый результат работы программы
-     * по сигналу SIGUSR1
+     * Поток, который оставляет программу работающей, когда
+     * все строки из stdin уже получены
      */
-    std::string usr1Str = InternalStruct.getResString(REVERSE_FLAG);
-    //вывод результата работы программы на экран
-    std::cout << usr1Str << std::endl;
+    boost::thread programmAliveThd(&programmAliveThdFunc);
 
-    /*
-     * потокобезопасная очередь получаемых извне
-     * апдейтов ask и bid
-     */
-    boost::shared_ptr<ThreadsafeQueue<std::string> >
-            inputQueue(new ThreadsafeQueue<std::string>());
-
-    //запуск потока, парсящего полученные строки
-    boost::thread parseReceivedMsgsThd(receivedMsgsParser,
-                                       inputQueue);
-
-    parseReceivedMsgsThd.join();
+    // программе дождаться окончания работы поддерживающего потока
+    programmAliveThd.join();
 
     return 0;
 }
