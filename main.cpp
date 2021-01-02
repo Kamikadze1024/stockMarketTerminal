@@ -80,7 +80,7 @@ void sigusr1Hdl(int sig) {
     //разрешить получение сигналов
     if(sigprocmask(SIG_SETMASK, &oldMask, NULL) != 0) {
         std::cout << "Failed to umask signals" << std::endl;
-        exit(2);
+        exit(CONST_FAILED_RC);
     }
 }
 
@@ -166,6 +166,13 @@ int main(int argc, char *argv[]) {
     std::string msg;
     bool askFirst = false;
     while (std::getline(std::cin, msg)) {
+
+        //если "пойман" ctrl + c - завершиться
+        if(!thdFlag.load()) {
+            std::cout << "Ctrl + c получен, завершаюсь" << std::endl;
+            exit(0);
+        }
+
         JsonParser jp(msg);
 
         //препарсинг, для "вытаскивания" U и u
@@ -198,6 +205,13 @@ int main(int argc, char *argv[]) {
         askFirst = jp.isAskFirst();
 
         InternalStruct.update(timestamp, asks, bids, askFirst);
+
+        /*
+         * Чтобы наблюдать изменения биржевого стакана в динамике,
+         * раскомментировать.
+         */
+        //boost::chrono::milliseconds period(CONST_THD_SLP_PER_MS);
+        //boost::this_thread::sleep_for(period);
     }
 
     /*
