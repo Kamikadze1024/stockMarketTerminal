@@ -27,6 +27,8 @@ https://binance-docs.github.io/apidocs/spot/en/#diff-depth-stream
 Json парсится посредствам boost.
 
 Запускать cat binance | cut -d ' ' -f3 | ./FinTechInstr
+Ну, а если есть желание запускать программу через QtCreator и пользоваться отладчиком со всеми
+удобствами, то используйте скрипт startTerminal.bash
 
 Замеченные проблемы:
 - Программа реагирует на Ctrl+C с большим опозданием

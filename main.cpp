@@ -50,76 +50,16 @@ void wait(int seconds) {
   boost::this_thread::sleep_for(boost::chrono::seconds{seconds});
 }
 
-//читающий сообщения извне поток
-void getUpdThread(boost::shared_ptr<ThreadsafeQueue<std::string>> inpQueue) {
-    //прочитать строки из stdin
-    for (std::string msg; std::getline(std::cin, msg);) {
-        inpQueue->push(msg);
-    }
-}
-
 
 //поток разбора пришедших сообщений
 void receivedMsgsParser(boost::shared_ptr<ThreadsafeQueue<std::string>>
                         inpQueue) {
-    bool askFirst = false;
-    while(THREAD_ACTIVE_FLG) {
-        while(!inpQueue->empty()) {
-            std::string s;
-            inpQueue->wait_and_pop(s);
-
-            JsonParser jp(s);
-
-            //препарсинг, для "вытаскивания" U и u
-            if(!jp.preParse()) {
-                std::cout << "PreParsing failed" << std::endl;
-                continue;
-            }
-
-            std::string U = jp.getU();
-            std::string u = jp.getLittleU();
-
-            if(InternalStruct.needDropEvent(U, u)) {
-                std::cout << "Event is dropping" << std::endl;
-                continue;
-            }
-
-
-            if(!jp.parse()) {
-                std::cout << "Parsing failed" << std::endl;
-                continue;
-            }
-
-            std::vector<std::pair<std::string, std::string>> bids
-                    = jp.getBids();
-
-            std::vector<std::pair<std::string, std::string>> asks
-                    = jp.getAsks();
-
-            std::string timestamp = jp.getTimestamp();
-
-            askFirst = jp.isAskFirst();
-
-            InternalStruct.update(timestamp, asks, bids, askFirst);
-        }
-
-        /*
-         * отобразить итоговый результат работы программы
-         * по сигналу SIGUSR1
-         */
-        if(NEED_SHOW_REZ) {
-            std::string usr1Str = InternalStruct.getResString(REVERSE_FLAG);
-            //вывод результата работы программы на экран
-            std::cout << usr1Str << std::endl;
-            NEED_SHOW_REZ = false;
-        }
 
         /*
          * Усыпить поток апдейта структуры InternalStruct
          */
         boost::chrono::milliseconds period(CONST_THD_SLP_PERIOD_MS);
         boost::this_thread::sleep_for(period);
-    }
 }
 
 //распечатать значения глобалов
@@ -201,21 +141,66 @@ int main(int argc, char *argv[]) {
     InternalStruct.init(SAVE_LEN);
 
     /*
+     * Однопоточное получение строки из
+     * stdin, и немедленная ее обработка
+     */
+    std::string msg;
+    bool askFirst = false;
+    while (std::getline(std::cin, msg)) {
+        JsonParser jp(msg);
+
+        //препарсинг, для "вытаскивания" U и u
+        if(!jp.preParse()) {
+            std::cout << "PreParsing failed" << std::endl;
+            continue;
+        }
+
+        std::string U = jp.getU();
+        std::string u = jp.getLittleU();
+
+        if(InternalStruct.needDropEvent(U, u)) {
+            std::cout << "Event is dropping" << std::endl;
+            continue;
+        }
+
+
+        if(!jp.parse()) {
+            std::cout << "Parsing failed" << std::endl;
+            continue;
+        }
+
+        std::vector<std::pair<std::string, std::string>> bids
+                = jp.getBids();
+
+        std::vector<std::pair<std::string, std::string>> asks
+                = jp.getAsks();
+
+        std::string timestamp = jp.getTimestamp();
+
+        askFirst = jp.isAskFirst();
+
+        InternalStruct.update(timestamp, asks, bids, askFirst);
+    }
+
+    /*
+     * отобразить итоговый результат работы программы
+     * по сигналу SIGUSR1
+     */
+    std::string usr1Str = InternalStruct.getResString(REVERSE_FLAG);
+    //вывод результата работы программы на экран
+    std::cout << usr1Str << std::endl;
+
+    /*
      * потокобезопасная очередь получаемых извне
      * апдейтов ask и bid
      */
     boost::shared_ptr<ThreadsafeQueue<std::string> >
             inputQueue(new ThreadsafeQueue<std::string>());
 
-    //запуск потока, читающего строки
-    boost::thread receiveMsgsThd(getUpdThread,
-                                 inputQueue);
-
     //запуск потока, парсящего полученные строки
     boost::thread parseReceivedMsgsThd(receivedMsgsParser,
                                        inputQueue);
 
-    receiveMsgsThd.join();
     parseReceivedMsgsThd.join();
 
     return 0;
