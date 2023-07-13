@@ -6,8 +6,8 @@
 #include <signal.h>
 #include <iostream>
 #include <atomic>
-#include "jsonparser.hpp"
-#include "InternalStruct.hpp"
+#include "include/jsonparser.hpp"
+#include "include/InternalStruct.hpp"
 
 //константы
 static const std::string CONST_KEY_REVERSE        = "-r";
